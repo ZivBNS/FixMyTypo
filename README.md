@@ -32,9 +32,9 @@ Double-tap Shift → the text will be replaced with the corrected version.
 Use the GUI window to toggle ON/OFF or exit the application.
 
 ## 🛠️ Tech Stack
-Python3
-keyboard - hotkey detection
-pyperclip - clipboard handling
-tkinter - GUI interface
+-Python3
+-keyboard: hotkey detection
+-pyperclip: clipboard handling
+-tkinter: GUI interface
 
 --- Feel free to use, modify, and share it. ---
