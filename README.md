@@ -24,7 +24,7 @@ You have two options to run Fix My Typo:
    - This option does not require Python or any installation.
      
 ## 🚀 Usage
-After you run the script(from the Python script or form the .exe file)
+After you run the script (from the Python script or from the .exe file)
 
 Steps:
 Select the text you want to fix.
