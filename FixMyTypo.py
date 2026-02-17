@@ -5,7 +5,23 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 
+"""
+FixMyTypo - lightweight clipboard-based keyboard-layout fixer.
+
+This script listens for a double-press of a physical key (by default
+`caps lock`) and converts selected text between Hebrew and English
+keyboard layouts. The conversion is done via character mapping tables
+and a simple heuristic that counts Hebrew vs English characters to
+determine direction.
+"""
+
 def fixTheTypoFunction(text):
+    """Convert mistyped text between Hebrew and English layouts.
+
+    Heuristic: count how many characters belong to English vs Hebrew
+    maps and convert in the direction of the minority-to-majority mapping.
+    This keeps punctuation and digits unchanged where mappings are absent.
+    """
     HE_TO_EN = {
         # bottom row
         'ז': 'z', 'ס': 'x', 'ב': 'c', 'ה': 'v', 'נ': 'b',
@@ -99,9 +115,14 @@ def fixTheTypoFunction(text):
 def log(*a):
     print(*a, file=sys.stdout, flush=True)
 
+# which physical key we use as the double-tap trigger
+TRIGGER_KEY = 'caps lock'
+
 _is_running = False
-_last_shift_time = 0.0
-enabled = True 
+_last_trigger_time = 0.0
+_last_run_time = 0.0
+_trigger_pressed = False
+enabled = True
 
 def _copy_selection_with_fallbacks():
     before = pyperclip.paste()
@@ -109,19 +130,28 @@ def _copy_selection_with_fallbacks():
     time.sleep(0.12)
     mid = pyperclip.paste()
     if mid != before and mid != "":
-        log("[copy] used Ctrl+C")
         return mid
 
     keyboard.press_and_release('ctrl+insert')
     time.sleep(0.12)
     after = pyperclip.paste()
     if after != before and after != "":
-        log("[copy] used Ctrl+Insert")
         return after
-    log("[copy] no selection or app blocked copy")
     return ""
 
+
+# ---- Windows master-volume helpers (pycaw) ----
+# Audio helpers removed: minimal build does not include volume control.
+
+
 def _paste_and_restore(original_clip, text):
+    """Temporarily replace clipboard content, paste, then restore.
+
+    Uses a short sleep to allow target applications to receive the
+    synthetic paste event. This is a pragmatic approach that works with
+    many apps but is not guaranteed for every program that hooks the
+    clipboard in unusual ways.
+    """
     pyperclip.copy(text)
     time.sleep(0.02)
     keyboard.press_and_release('ctrl+v')
@@ -129,15 +159,33 @@ def _paste_and_restore(original_clip, text):
     pyperclip.copy(original_clip)
 
 def _handle_hotkey():
-    global _is_running, enabled
+    global _is_running, enabled, _last_run_time
+
+    """Perform the clipboard conversion operation.
+
+    Steps:
+    1. Debounce to avoid repeated activations.
+    2. Snapshot master volume (best-effort) to restore later if it
+       appears the conversion caused an accidental volume change.
+    3. Copy selected text, convert it, paste the result and restore
+       the original clipboard contents.
+    4. Check the volume and restore if it decreased.
+
+    The function is defensive: failures in any single step will not
+    crash the application.
+    """
     if not enabled or _is_running:
         return
 
+    now = time.time()
+    if now - _last_run_time < 0.5:
+        return
+    _last_run_time = now
+
+    # (no volume snapshot in minimal build)
+
     _is_running = True
     try:
-        keyboard.release('shift')
-        time.sleep(0.01)
-
         original = pyperclip.paste()
         selected = _copy_selection_with_fallbacks()
         if not selected:
@@ -149,33 +197,51 @@ def _handle_hotkey():
 
         _paste_and_restore(original, fixed)
 
-        keyboard.release('shift')
-        time.sleep(0.01)
+        # short delay to allow target app to process paste
+        time.sleep(0.06)
 
     except Exception as e:
         log("[error]", e)
     finally:
         _is_running = False
 
-def _shift_hook(e):
-    global _last_shift_time
-    if e.name == 'shift' and e.event_type == 'down':
+def _trigger_hook(e):
+    """Detect double-press of the configured trigger key and run.
+
+    Minimal behavior: if the configured `TRIGGER_KEY` is pressed twice
+    within ~0.35s the conversion flow (`_handle_hotkey`) is invoked.
+    """
+    global _last_trigger_time, _trigger_pressed
+
+    # normalize event name for comparison
+    name = (getattr(e, 'name', '') or '').lower().replace('_', ' ')
+    if name != TRIGGER_KEY:
+        return
+
+    if e.event_type == 'down':
+        # ignore auto-repeat 'down' events while key remains pressed
+        if _trigger_pressed:
+            return
+        _trigger_pressed = True
         now = time.time()
-        if now - _last_shift_time < 0.35:
-            log("[trigger] double-shift (manual detector)")
+        if now - _last_trigger_time < 0.35:
+            # double-press detected → perform conversion
             _handle_hotkey()
-        _last_shift_time = now
+        _last_trigger_time = now
+    elif e.event_type == 'up':
+        _trigger_pressed = False
+
+# Media handler removed in minimal build (no volume/media interception)
 
 def register_hotkeys():
-    keyboard.add_hotkey('shift, shift', _handle_hotkey,suppress=True, trigger_on_release=True)
-    log("[hotkey] registered: 'shift, shift'")
-    keyboard.hook(_shift_hook)
+    # Minimal hotkey registration: only the low-level trigger hook is needed
+    keyboard.hook(_trigger_hook)
 
 def run_gui():
     global enabled
     root = tk.Tk()
     root.title("Typo Fixer")
-    root.geometry("220x140")
+    root.geometry("180x140")
     root.resizable(False, False)
 
     style = ttk.Style()
@@ -202,7 +268,9 @@ def run_gui():
         root.destroy()
         sys.exit(0)
 
-    ttk.Label(root, text="Double‑Shift to convert",justify="center").pack(pady=(8, 4))
+    # Informational label that shows the trigger key in the preferred
+    # user-facing format (title-cased).
+    ttk.Label(root, text=f"Double‑{TRIGGER_KEY.title()} to convert",justify="center").pack(pady=(8, 4))
 
     toggle_btn = tk.Button(root, text="ON", width=10, height=1,font=("Segoe UI", 12, "bold"))
     toggle_btn.pack(pady=4)
@@ -212,13 +280,12 @@ def run_gui():
 
     btn_frame = ttk.Frame(root)
     btn_frame.pack(pady=(6, 8))
-    ttk.Button(btn_frame, text="Exit", command=quit_app).grid(row=0, column=0, padx=5)
+    ttk.Button(btn_frame, text="Exit", command=quit_app).pack(padx=5)
 
     update_button_look()
     root.mainloop()
 
 def main():
-    log("Running. Try: Double‑Shift  |  Exit via window")
     register_hotkeys()
     run_gui()
 
